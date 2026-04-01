@@ -3,6 +3,7 @@
 
 [![Streamlit App](https://static.streamlit.io/badges/streamlit_badge_black_white.svg)](https://smart-support-v2.streamlit.app/)
 [![Azure](https://img.shields.io/badge/Cloud-Azure-0089D6?style=flat&logo=microsoft-azure)](https://azure.microsoft.com/)
+
 [🔗 Connect on LinkedIn](https://www.linkedin.com/in/brendan-gobvu)
 
 ## Problem Statement
