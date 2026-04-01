@@ -1,7 +1,7 @@
 # 💎 Smart Support AI: Analytics Pro
 ### Enterprise Cloud Sentiment Analysis & GPT-4 Command Center
 
-[![Streamlit App](https://static.streamlit.io/badges/streamlit_badge_black_white.svg)](YOUR_STREAMLIT_URL_HERE)
+[![Streamlit App](https://static.streamlit.io/badges/streamlit_badge_black_white.svg)](https://smart-support-v2.streamlit.app/)
 [![Azure](https://img.shields.io/badge/Cloud-Azure-0089D6?style=flat&logo=microsoft-azure)](https://azure.microsoft.com/)
 
 ## Problem Statement
@@ -61,5 +61,5 @@ Create a .env file based on the .env.example provided and add your Azure credent
    streamlit run app.py
 
 👨‍💻 Author
-Brendan Gobvu Cloud & AI Enthusiast | Based in Poland LinkedIn | Portfolio
+Brendan Gobvu Cloud & AI Enthusiast | Based in Poland [![Linkedin](www.linkedin.com/in/brendan-gobvu)] 
 Built for the 2026 Enterprise AI Landscape.
