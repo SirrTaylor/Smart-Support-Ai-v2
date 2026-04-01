@@ -3,6 +3,7 @@
 
 [![Streamlit App](https://static.streamlit.io/badges/streamlit_badge_black_white.svg)](https://smart-support-v2.streamlit.app/)
 [![Azure](https://img.shields.io/badge/Cloud-Azure-0089D6?style=flat&logo=microsoft-azure)](https://azure.microsoft.com/)
+[🔗 Connect on LinkedIn](https://www.linkedin.com/in/brendan-gobvu)
 
 ## Problem Statement
 In modern e-commerce and SaaS, companies are flooded with thousands of customer reviews across multiple platforms. Manually categorizing these reviews is slow, prone to human bias, and makes it impossible to react to critical bugs in real-time.
@@ -63,6 +64,5 @@ Create a .env file based on the .env.example provided and add your Azure credent
    streamlit run app.py
 
 👨‍💻 Author
-Brendan Gobvu Cloud & AI Enthusiast | Based in Poland [![LinkedIn](https://img.shields.io/badge/LinkedIn-Brendan%20Gobvu-0077B5?style=for-the-badge&logo=linkedin)](https://www.linkedin.com/in/brendan-gobvu)
-
+Brendan Gobvu Cloud & AI Enthusiast | Based in Poland 
 Built for the 2026 Enterprise AI Landscape.
