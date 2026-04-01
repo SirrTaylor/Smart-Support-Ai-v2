@@ -63,5 +63,6 @@ Create a .env file based on the .env.example provided and add your Azure credent
    streamlit run app.py
 
 👨‍💻 Author
-Brendan Gobvu Cloud & AI Enthusiast | Based in Poland ![Linkedin](https://www.linkedin.com/in/brendan-gobvu)
+Brendan Gobvu Cloud & AI Enthusiast | Based in Poland [![LinkedIn](https://img.shields.io/badge/LinkedIn-Brendan%20Gobvu-0077B5?style=for-the-badge&logo=linkedin)](https://www.linkedin.com/in/brendan-gobvu)
+
 Built for the 2026 Enterprise AI Landscape.
