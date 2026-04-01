@@ -18,6 +18,7 @@ In modern e-commerce and SaaS, companies are flooded with thousands of customer 
 The system follows a professional ETL (Extract, Transform, Load) and RAG (Retrieval-Augmented Generation) pattern:
 
 **CSV Upload** → **Azure AI Language Service** (Sentiment Enrichment) → **Azure Cosmos DB** (NoSQL Storage) → **Azure OpenAI (GPT-4)** (Synthesis & Chat)
+![Architecture](./architecture.png)
 
 > **Pro Tip:** I used **Deterministic ID Logic** to ensure that re-uploading the same dataset updates existing records rather than creating duplicates—keeping the cloud database clean and cost-efficient.
 
