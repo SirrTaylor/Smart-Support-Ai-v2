@@ -4,7 +4,7 @@
 [![Streamlit App](https://static.streamlit.io/badges/streamlit_badge_black_white.svg)](YOUR_STREAMLIT_URL_HERE)
 [![Azure](https://img.shields.io/badge/Cloud-Azure-0089D6?style=flat&logo=microsoft-azure)](https://azure.microsoft.com/)
 
-## 📝 The "Why" (Problem Statement)
+## Problem Statement
 In modern e-commerce and SaaS, companies are flooded with thousands of customer reviews across multiple platforms. Manually categorizing these reviews is slow, prone to human bias, and makes it impossible to react to critical bugs in real-time.
 
 **Smart Support AI** solves this by providing a high-speed, cloud-native pipeline that:
@@ -43,22 +43,23 @@ The system follows a professional ETL (Extract, Transform, Load) and RAG (Retrie
 ## ⚙️ Setup & Installation
 
 1. **Clone the Repo:**
-bash
+   ```bash
    git clone [https://github.com/YOUR_USERNAME/YOUR_REPO_NAME.git](https://github.com/YOUR_USERNAME/YOUR_REPO_NAME.git)
-   cd YOUR_REPO_NAME
+    cd YOUR_REPO_NAME
 
-2.Install Dependencies:
+2. **Install Dependencies:**
 
-bash
-pip install -r requirements.txt
-Configure Environment:
+   ```bash
+   pip install -r requirements.txt
+   
+3. **Configure Environment:**
 Create a .env file based on the .env.example provided and add your Azure credentials.
 
-3. Run the App:
+3. **Run the App:**
 
-bash
-streamlit run app.py
+   ```bash
+   streamlit run app.py
+
 👨‍💻 Author
 Brendan Gobvu Cloud & AI Enthusiast | Based in Poland LinkedIn | Portfolio
-
 Built for the 2026 Enterprise AI Landscape.
