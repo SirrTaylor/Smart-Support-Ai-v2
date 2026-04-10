@@ -14,14 +14,27 @@ LOCKOUT_MINUTES = int(os.getenv("APP_LOCKOUT_MINUTES", "15"))
 SESSION_MAX_AGE_HOURS = int(os.getenv("APP_SESSION_MAX_AGE_HOURS", "12"))
 
 
+def connect_postgres():
+    """
+    Single entry point for Postgres connections.
+    Set POSTGRES_SSLMODE=require (or verify-full) for Neon, Supabase, Azure PG, etc.
+    """
+    port = os.getenv("POSTGRES_PORT") or "5432"
+    kwargs = {
+        "dbname": os.getenv("POSTGRES_DB"),
+        "user": os.getenv("POSTGRES_USER"),
+        "password": os.getenv("POSTGRES_PASSWORD"),
+        "host": os.getenv("POSTGRES_HOST"),
+        "port": port,
+    }
+    sslmode = (os.getenv("POSTGRES_SSLMODE") or "").strip()
+    if sslmode:
+        kwargs["sslmode"] = sslmode
+    return psycopg2.connect(**kwargs)
+
+
 def _get_conn():
-    return psycopg2.connect(
-        dbname=os.getenv("POSTGRES_DB"),
-        user=os.getenv("POSTGRES_USER"),
-        password=os.getenv("POSTGRES_PASSWORD"),
-        host=os.getenv("POSTGRES_HOST"),
-        port=os.getenv("POSTGRES_PORT"),
-    )
+    return connect_postgres()
 
 
 def _utc_now():

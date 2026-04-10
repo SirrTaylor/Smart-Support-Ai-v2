@@ -27,6 +27,7 @@ from auth import (
     set_user_active_by_admin,
     create_session_token,
     verify_session_token,
+    connect_postgres,
 )
 
 # 1. Setup and Environment
@@ -151,13 +152,7 @@ def setup_postgres_schema(cur):
 
 def mirror_to_postgres(enriched_batch):
     try:
-        conn = psycopg2.connect(
-            dbname=os.getenv("POSTGRES_DB"),
-            user=os.getenv("POSTGRES_USER"),
-            password=os.getenv("POSTGRES_PASSWORD"),
-            host=os.getenv("POSTGRES_HOST"),
-            port=os.getenv("POSTGRES_PORT")
-        )
+        conn = connect_postgres()
         cur = conn.cursor()
         setup_postgres_schema(cur)
 
@@ -433,7 +428,31 @@ def render_auth_gate():
             ensure_bootstrap_admin()
             st.session_state.auth_ready = True
         except Exception as e:
-            st.error(f"Authentication setup failed: {e}")
+            st.error("**Authentication setup failed:** could not connect to PostgreSQL.")
+            st.code(str(e), language="text")
+            pg_host = (os.getenv("POSTGRES_HOST") or "").strip().lower()
+            if pg_host in ("", "localhost", "127.0.0.1", "::1"):
+                st.markdown(
+                    """
+**Hosting on Streamlit Community Cloud?**  
+There is no Postgres on `localhost` in that environment. Use a **hosted** database and put the same values in **App settings → Secrets** (or your `.env` locally):
+
+| Secret | Example |
+|--------|---------|
+| `POSTGRES_HOST` | e.g. `ep-cool-name-12345.us-east-2.aws.neon.tech` (Neon) or your Azure/Supabase host |
+| `POSTGRES_PORT` | usually `5432` |
+| `POSTGRES_DB` | database name |
+| `POSTGRES_USER` / `POSTGRES_PASSWORD` | from the provider |
+
+For **Neon**, **Supabase**, or **Azure Database for PostgreSQL**, add:
+
+`POSTGRES_SSLMODE` = `require`
+
+Then **Redeploy** the app. Allow **SSL** on the database; if your provider uses IP allowlists, allow **Streamlit Cloud egress** (or use “allow all” for a small demo DB only).
+                    """
+                )
+            else:
+                st.caption("Check host, port, password, firewall, and SSL settings (`POSTGRES_SSLMODE`).")
             st.stop()
 
     # Restore user from signed session token (survives browser refresh)
@@ -871,13 +890,7 @@ with st.container(border=True):
     data_source = None
 
     try:
-        with psycopg2.connect(
-            dbname=os.getenv("POSTGRES_DB"),
-            user=os.getenv("POSTGRES_USER"),
-            password=os.getenv("POSTGRES_PASSWORD"),
-            host=os.getenv("POSTGRES_HOST"),
-            port=os.getenv("POSTGRES_PORT")
-        ) as conn:
+        with connect_postgres() as conn:
             with conn.cursor() as cur:
                 cur.execute("SELECT * FROM enriched_analytics_view")
                 pg_rows = cur.fetchall()
@@ -1032,11 +1045,7 @@ with st.expander("⚠️ Danger Zone"):
                             container.delete_item(item=item['id'], partition_key=item['Company'])
 
                         # Delete from Postgres
-                        conn = psycopg2.connect(
-                            dbname=os.getenv("POSTGRES_DB"), user=os.getenv("POSTGRES_USER"),
-                            password=os.getenv("POSTGRES_PASSWORD"), host=os.getenv("POSTGRES_HOST"),
-                            port=os.getenv("POSTGRES_PORT")
-                        )
+                        conn = connect_postgres()
                         cur = conn.cursor()
                         cur.execute("""
                             DELETE FROM raw_support_data
@@ -1080,11 +1089,7 @@ with st.expander("⚠️ Danger Zone"):
                         )
 
                         # Wipe Postgres
-                        conn = psycopg2.connect(
-                            dbname=os.getenv("POSTGRES_DB"), user=os.getenv("POSTGRES_USER"),
-                            password=os.getenv("POSTGRES_PASSWORD"), host=os.getenv("POSTGRES_HOST"),
-                            port=os.getenv("POSTGRES_PORT")
-                        )
+                        conn = connect_postgres()
                         cur = conn.cursor()
                         cur.execute("TRUNCATE TABLE raw_support_data RESTART IDENTITY;")
                         conn.commit()
