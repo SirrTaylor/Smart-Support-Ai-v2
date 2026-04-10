@@ -95,40 +95,41 @@ Create a file named .env in the root directory of the project. This file stores 
 
 Copy the template below and fill in your specific Azure and Database credentials:
 
-Bash
-# --- POSTGRESQL CONFIG ---
-DB_HOST=localhost
-DB_PORT=5432
-DB_NAME=smart_support_db
-DB_USER=postgres
-DB_PASSWORD=your_password_here
+   ```bash
+   --- POSTGRESQL CONFIG ---
+   DB_HOST=localhost
+   DB_PORT=5432
+   DB_NAME=smart_support_db
+   DB_USER=postgres
+   DB_PASSWORD=your_password_here
+   
+    --- AZURE AI LANGUAGE (Sentiment) ---
+   AZURE_LANGUAGE_ENDPOINT=https://your-resource-name.cognitiveservices.azure.com/
+   AZURE_LANGUAGE_KEY=your_language_subscription_key
+   
+    --- AZURE OPENAI (Command Center) ---
+   AZURE_OPENAI_ENDPOINT=https://your-resource-name.openai.azure.com/
+   AZURE_OPENAI_KEY=your_openai_api_key
+   AZURE_OPENAI_DEPLOYMENT_NAME=gpt-4 # or your specific model deployment name
+   
+    --- AZURE COSMOS DB ---
+   COSMOS_CONNECTION_STRING=your_cosmos_db_primary_connection_string
+   COSMOS_DATABASE_ID=SupportAnalytics
+   COSMOS_CONTAINER_ID=Reviews
+   
+   --- APP SECURITY ---
+   SECRET_KEY=your_random_secret_key_for_session_management
+   3. Installation & Launch
+   Once your database is ready and .env is configured:
 
-# --- AZURE AI LANGUAGE (Sentiment) ---
-AZURE_LANGUAGE_ENDPOINT=https://your-resource-name.cognitiveservices.azure.com/
-AZURE_LANGUAGE_KEY=your_language_subscription_key
-
-# --- AZURE OPENAI (Command Center) ---
-AZURE_OPENAI_ENDPOINT=https://your-resource-name.openai.azure.com/
-AZURE_OPENAI_KEY=your_openai_api_key
-AZURE_OPENAI_DEPLOYMENT_NAME=gpt-4 # or your specific model deployment name
-
-# --- AZURE COSMOS DB ---
-COSMOS_CONNECTION_STRING=your_cosmos_db_primary_connection_string
-COSMOS_DATABASE_ID=SupportAnalytics
-COSMOS_CONTAINER_ID=Reviews
-
-# --- APP SECURITY ---
-SECRET_KEY=your_random_secret_key_for_session_management
-3. Installation & Launch
-Once your database is ready and .env is configured:
-
+```
 **Install dependencies:**
 
    ```bash
    pip install -r requirements.txt
-
+```
 **Run the app**
   ```bash
    pip install -r requirements.txt
-
+```
 Security Note: Always use synthetic data for testing. Ensure your .gitignore file includes .env to prevent leaking your Azure keys to the public repository.
