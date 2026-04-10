@@ -44,27 +44,7 @@ The system follows a professional ETL (Extract, Transform, Load) and RAG (Retrie
 
 ---
 
-## ⚙️ Setup & Installation
-
-1. **Clone the Repo:**
-   ```bash
-   git clone [https://github.com/YOUR_USERNAME/YOUR_REPO_NAME.git](https://github.com/YOUR_USERNAME/YOUR_REPO_NAME.git)
-    cd YOUR_REPO_NAME
-
-2. **Install Dependencies:**
-
-   ```bash
-   pip install -r requirements.txt
-   
-3. **Configure Environment:**
-Create a .env file based on the .env.example provided and add your Azure credentials.
-
-3. **Run the App:**
-
-   ```bash
-   streamlit run app.py
-
-🛠 Local Setup Instructions
+##🛠 Local Setup Instructions
 1. Database Configuration (PostgreSQL)
 The app uses PostgreSQL to store user credentials and mirrored analytics data.
 
@@ -119,16 +99,15 @@ Copy the template below and fill in your specific Azure and Database credentials
    
    --- APP SECURITY ---
    SECRET_KEY=your_random_secret_key_for_session_management
-   3. Installation & Launch
-   Once your database is ready and .env is configured:
+  
 
 ```
-**Install dependencies:**
+**3.Install dependencies:**
 
    ```bash
    pip install -r requirements.txt
 ```
-**Run the app**
+**4. Run the app**
   ```bash
    pip install -r requirements.txt
 ```
