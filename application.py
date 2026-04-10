@@ -3,6 +3,7 @@ import pandas as pd
 import os
 import uuid
 import io
+import time
 from datetime import datetime
 from dotenv import load_dotenv
 from azure.ai.textanalytics import TextAnalyticsClient
@@ -24,10 +25,32 @@ from auth import (
     get_auth_events,
     unlock_user_by_admin,
     set_user_active_by_admin,
+    create_session_token,
+    verify_session_token,
 )
 
 # 1. Setup and Environment
 load_dotenv()
+
+
+def _merge_streamlit_secrets_into_environ():
+    """Streamlit Community Cloud secrets → os.environ (same names as .env)."""
+    try:
+        for key, val in st.secrets.items():
+            if isinstance(val, str) and val.strip():
+                if not os.getenv(key):
+                    os.environ[key] = val
+            elif isinstance(val, dict):
+                for sub_key, sub_val in val.items():
+                    if isinstance(sub_val, str) and sub_val.strip():
+                        composite = f"{key}_{sub_key}".upper()
+                        if not os.getenv(composite):
+                            os.environ[composite] = sub_val
+    except Exception:
+        pass
+
+
+_merge_streamlit_secrets_into_environ()
 
 st.set_page_config(
     page_title=" Smart Support AI | Analytics Pro",
@@ -102,11 +125,21 @@ def setup_postgres_schema(cur):
             data_content JSONB
         );
     """)
+    # Recreate the view to allow controlled column changes/order updates.
+    # PostgreSQL does not allow changing existing view column positions/names
+    # via CREATE OR REPLACE VIEW when the projection order changes.
+    cur.execute("DROP VIEW IF EXISTS enriched_analytics_view;")
     cur.execute("""
-        CREATE OR REPLACE VIEW enriched_analytics_view AS
+        CREATE VIEW enriched_analytics_view AS
         SELECT
             id as internal_sync_id,
             sync_timestamp,
+            COALESCE(
+                data_content->>'source_date_iso',
+                data_content->>'source_date',
+                data_content->>'date',
+                data_content->>'Date'
+            ) as original_date,
             data_content->>'id' as record_id,
             data_content->>'Company' as company,
             data_content->>'sentiment' as sentiment,
@@ -175,7 +208,121 @@ def sanitize_company_name(name: str) -> str:
     import re
     return re.sub(r"[^\w\s\-]", "", name).strip()
 
-def master_sync_and_save(df, company_name):
+def log_runtime_issue(scope: str, error: Exception):
+    """Store recent runtime issues for quick in-app diagnostics."""
+    if "runtime_issues" not in st.session_state:
+        st.session_state.runtime_issues = []
+    st.session_state.runtime_issues.append({
+        "ts": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        "scope": scope,
+        "error": str(error),
+    })
+    st.session_state.runtime_issues = st.session_state.runtime_issues[-20:]
+
+def show_processing_overlay(placeholder, message="Processing..."):
+    """Render a temporary full-screen processing overlay."""
+    placeholder.markdown(
+        f"""
+        <style>
+            .ssa-overlay {{
+                position: fixed;
+                top: 0;
+                left: 0;
+                width: 100vw;
+                height: 100vh;
+                background: rgba(15, 23, 42, 0.28);
+                z-index: 99999;
+                display: flex;
+                align-items: center;
+                justify-content: center;
+                opacity: 1;
+                animation: ssa-fade-in 180ms ease-out;
+            }}
+            .ssa-card {{
+                width: min(520px, 88vw);
+                background: #ffffff;
+                border-radius: 14px;
+                padding: 20px 22px;
+                box-shadow: 0 12px 30px rgba(0, 0, 0, 0.18);
+                font-family: "Segoe UI", Arial, sans-serif;
+                animation: ssa-card-in 220ms ease-out;
+            }}
+            .ssa-title {{
+                margin: 0 0 10px 0;
+                font-size: 18px;
+                font-weight: 700;
+                color: #0f172a;
+            }}
+            .ssa-sub {{
+                margin: 0 0 12px 0;
+                font-size: 13px;
+                color: #475569;
+            }}
+            .ssa-track {{
+                width: 100%;
+                height: 10px;
+                border-radius: 999px;
+                background: #e2e8f0;
+                overflow: hidden;
+            }}
+            .ssa-bar {{
+                height: 100%;
+                width: 40%;
+                background: linear-gradient(90deg, #2563eb, #38bdf8);
+                border-radius: 999px;
+                animation: ssa-slide 1.2s infinite ease-in-out;
+            }}
+            @keyframes ssa-slide {{
+                0% {{ transform: translateX(-120%); }}
+                100% {{ transform: translateX(280%); }}
+            }}
+            @keyframes ssa-fade-in {{
+                from {{ opacity: 0; }}
+                to {{ opacity: 1; }}
+            }}
+            @keyframes ssa-card-in {{
+                from {{ opacity: 0; transform: translateY(6px) scale(0.985); }}
+                to {{ opacity: 1; transform: translateY(0) scale(1); }}
+            }}
+        </style>
+        <div class="ssa-overlay">
+            <div class="ssa-card">
+                <p class="ssa-title">Processing</p>
+                <p class="ssa-sub">{message}</p>
+                <div class="ssa-track"><div class="ssa-bar"></div></div>
+            </div>
+        </div>
+        """,
+        unsafe_allow_html=True
+    )
+
+def hide_processing_overlay(placeholder):
+    """Fade out overlay before clearing to avoid abrupt transitions."""
+    placeholder.markdown(
+        """
+        <style>
+            .ssa-overlay {
+                animation: ssa-fade-out 220ms ease-in forwards !important;
+            }
+            .ssa-card {
+                animation: ssa-card-out 220ms ease-in forwards !important;
+            }
+            @keyframes ssa-fade-out {
+                from { opacity: 1; }
+                to { opacity: 0; }
+            }
+            @keyframes ssa-card-out {
+                from { opacity: 1; transform: translateY(0) scale(1); }
+                to { opacity: 0; transform: translateY(6px) scale(0.985); }
+            }
+        </style>
+        """,
+        unsafe_allow_html=True
+    )
+    time.sleep(0.22)
+    placeholder.empty()
+
+def master_sync_and_save(df, company_name, selected_date_col=None):
     """Unified function to Enrich, Save to Cosmos, and Mirror to Postgres."""
     container = get_cosmos_container()
     azure_client = get_azure_client()
@@ -188,6 +335,18 @@ def master_sync_and_save(df, company_name):
         return False
 
     id_col = next((c for c in df.columns if 'id' in c.lower()), None)
+    date_col = None
+    if selected_date_col and selected_date_col in df.columns:
+        date_col = selected_date_col
+    else:
+        date_col = next(
+            (
+                c for c in df.columns
+                if any(k in c.lower() for k in ["date", "created", "time", "timestamp"])
+                and "sync" not in c.lower()
+            ),
+            None
+        )
     df = df.dropna(subset=[rev_col])
 
     enriched_batch = []
@@ -224,6 +383,12 @@ def master_sync_and_save(df, company_name):
         doc['Company'] = company_name.upper()
         doc['sentiment'] = sentiment
         doc['urgency'] = urgency_flag
+        if date_col and date_col in row and pd.notnull(row[date_col]):
+            raw_source_date = str(row[date_col]).strip()
+            doc["source_date"] = raw_source_date
+            parsed_source_date = pd.to_datetime(raw_source_date, errors="coerce")
+            if pd.notna(parsed_source_date):
+                doc["source_date_iso"] = parsed_source_date.strftime("%Y-%m-%d")
 
         for col, val in doc.items():
             if isinstance(val, (pd.Timestamp, datetime)):
@@ -259,6 +424,8 @@ def render_auth_gate():
         st.session_state.auth_user = None
     if "auth_ready" not in st.session_state:
         st.session_state.auth_ready = False
+    if "auth_token_checked" not in st.session_state:
+        st.session_state.auth_token_checked = False
 
     if not st.session_state.auth_ready:
         try:
@@ -268,6 +435,14 @@ def render_auth_gate():
         except Exception as e:
             st.error(f"Authentication setup failed: {e}")
             st.stop()
+
+    # Restore user from signed session token (survives browser refresh)
+    if st.session_state.auth_user is None and not st.session_state.auth_token_checked:
+        st.session_state.auth_token_checked = True
+        token = st.query_params.get("session")
+        restored_user = verify_session_token(token) if token else None
+        if restored_user:
+            st.session_state.auth_user = restored_user
 
     user = st.session_state.auth_user
 
@@ -281,12 +456,13 @@ def render_auth_gate():
             with st.form("login_form"):
                 username = st.text_input("Username").strip()
                 password = st.text_input("Password", type="password")
-                submitted = st.form_submit_button("Login", use_container_width=True)
+                submitted = st.form_submit_button("Login", width="stretch")
 
             if submitted:
                 ok, message, auth_user = authenticate_user(username, password)
                 if ok:
                     st.session_state.auth_user = auth_user
+                    st.query_params["session"] = create_session_token(auth_user)
                     st.rerun()
                 else:
                     st.error(message)
@@ -298,9 +474,10 @@ def render_auth_gate():
     with st.sidebar:
         st.markdown(f"**Signed in as:** `{user['username']}`")
         st.caption(f"Role: {user['role']}")
-        if st.button("Logout", use_container_width=True):
+        if st.button("Logout", width="stretch"):
             record_sign_out(user["username"], user_id=user["id"])
             st.session_state.auth_user = None
+            st.query_params.pop("session", None)
             st.rerun()
 
     # Force first-time password change when required.
@@ -311,7 +488,7 @@ def render_auth_gate():
             with st.form("force_change_password"):
                 new_pw = st.text_input("New Password", type="password")
                 confirm_pw = st.text_input("Confirm New Password", type="password")
-                change_submitted = st.form_submit_button("Update Password", use_container_width=True)
+                change_submitted = st.form_submit_button("Update Password", width="stretch")
 
             if change_submitted:
                 if new_pw != confirm_pw:
@@ -321,6 +498,7 @@ def render_auth_gate():
                     if ok:
                         st.success("Password updated. Please log in again.")
                         st.session_state.auth_user = None
+                        st.query_params.pop("session", None)
                         st.rerun()
                     else:
                         st.error(msg)
@@ -335,7 +513,7 @@ def render_auth_gate():
                 new_username = st.text_input("New Username").strip().lower()
                 new_password = st.text_input("Temporary Password", type="password")
                 new_role = st.selectbox("Role", options=["user", "admin"], index=0)
-                create_submitted = st.form_submit_button("Create User", use_container_width=True)
+                create_submitted = st.form_submit_button("Create User", width="stretch")
             if create_submitted:
                 ok, msg = create_user(
                     username=new_username,
@@ -351,7 +529,7 @@ def render_auth_gate():
             with st.form("admin_reset_user_password"):
                 target_username = st.text_input("Username to Reset").strip().lower()
                 temp_password = st.text_input("New Temp Password", type="password")
-                reset_submitted = st.form_submit_button("Reset Password", use_container_width=True)
+                reset_submitted = st.form_submit_button("Reset Password", width="stretch")
             if reset_submitted:
                 ok, msg = reset_password_by_manager(target_username, temp_password)
                 if ok:
@@ -367,7 +545,7 @@ def render_auth_gate():
                     "Unlock User",
                     options=all_usernames if all_usernames else ["No users found"],
                 )
-                unlock_submitted = st.form_submit_button("Unlock Account", use_container_width=True)
+                unlock_submitted = st.form_submit_button("Unlock Account", width="stretch")
             if unlock_submitted:
                 if unlock_target == "No users found":
                     st.error("No users available to unlock.")
@@ -384,7 +562,7 @@ def render_auth_gate():
                     options=all_usernames if all_usernames else ["No users found"],
                 )
                 toggle_action = st.selectbox("Action", options=["Deactivate", "Activate"], index=0)
-                toggle_submitted = st.form_submit_button("Apply Status", use_container_width=True)
+                toggle_submitted = st.form_submit_button("Apply Status", width="stretch")
             if toggle_submitted:
                 if toggle_target == "No users found":
                     st.error("No users available.")
@@ -402,7 +580,7 @@ def render_auth_gate():
                     "Delete User",
                     options=deletable if deletable else ["No deletable users"],
                 )
-                delete_submitted = st.form_submit_button("Remove User", use_container_width=True)
+                delete_submitted = st.form_submit_button("Remove User", width="stretch")
 
             if delete_submitted:
                 if delete_target == "No deletable users":
@@ -421,14 +599,14 @@ def render_auth_gate():
                     events,
                     columns=["timestamp", "username", "event", "status", "detail"],
                 )
-                st.dataframe(event_df, use_container_width=True, hide_index=True, height=260)
+                st.dataframe(event_df, width="stretch", hide_index=True, height=260)
                 auth_csv = event_df.to_csv(index=False).encode("utf-8-sig")
                 st.download_button(
                     "Download Auth Logs (CSV)",
                     data=auth_csv,
                     file_name=f"auth_events_{datetime.now().strftime('%Y%m%d_%H%M')}.csv",
                     mime="text/csv",
-                    use_container_width=True,
+                    width="stretch",
                 )
             else:
                 st.caption("No auth events recorded yet.")
@@ -445,16 +623,30 @@ st.divider()
 # --- 1. INTELLIGENCE BRIEFING (Full Width) ---
 with st.container(border=True):
     try:
-        container = get_cosmos_container()
-        all_items = list(container.read_all_items())
-        if all_items:
-            if 'exec_summary' not in st.session_state:
-                with st.spinner("Analyzing cross-company trends..."):
-                    st.session_state.exec_summary = generate_executive_summary(all_items)
+        if 'exec_summary' in st.session_state:
             st.markdown(st.session_state.exec_summary)
         else:
-            st.info("👋 Welcome! Upload a CSV to start the sync and generate insights.")
-    except Exception:
+            container = get_cosmos_container()
+            all_items = list(container.query_items(
+                query="""
+                    SELECT TOP 200
+                        c.Company,
+                        c.sentiment,
+                        c.Review,
+                        c.review
+                    FROM c
+                    ORDER BY c._ts DESC
+                """,
+                enable_cross_partition_query=True
+            ))
+            if all_items:
+                with st.spinner("Analyzing cross-company trends..."):
+                    st.session_state.exec_summary = generate_executive_summary(all_items)
+                st.markdown(st.session_state.exec_summary)
+            else:
+                st.info("👋 Welcome! Upload a CSV to start the sync and generate insights.")
+    except Exception as e:
+        log_runtime_issue("intelligence_briefing", e)
         st.caption("Intelligence Briefing unavailable.")
 
 # --- 2. MASTER SYNC ---
@@ -463,6 +655,7 @@ with st.container(border=True):
     uploaded_file = st.file_uploader("Upload CSV", type="csv")
 
     if uploaded_file:
+        sep_map = {",": ",", ";": ";", "Tab": "\t", "Auto-detect": None}
         sync_col1, sync_col2 = st.columns(2)
         with sync_col1:
             sep_choice = st.selectbox("Separator", [",", ";", "Tab", "Auto-detect"])
@@ -470,22 +663,57 @@ with st.container(border=True):
             raw_comp_name = st.text_input("Company Name", placeholder="e.g., Netflix").strip()
             comp_name = sanitize_company_name(raw_comp_name)
 
+        selected_date_col = None
+        preview_df = None
+        current_sep = sep_map[sep_choice]
+        try:
+            uploaded_file.seek(0)
+            preview_df = pd.read_csv(
+                uploaded_file,
+                sep=current_sep if current_sep else None,
+                engine='python' if not current_sep else None,
+                nrows=80
+            )
+            uploaded_file.seek(0)
+        except Exception as e:
+            log_runtime_issue("csv_preview_read", e)
+            st.warning("Could not preview CSV columns. You can still continue with auto-detect.")
+
+        if preview_df is not None and not preview_df.empty:
+            candidate_cols = [
+                c for c in preview_df.columns
+                if any(k in c.lower() for k in ["date", "created", "time", "timestamp"])
+                and "sync" not in c.lower()
+            ]
+            date_options = ["Auto-detect"] + preview_df.columns.tolist()
+            default_index = 0
+            if candidate_cols:
+                default_index = date_options.index(candidate_cols[0])
+                st.caption(f"Detected date-like columns: {', '.join(candidate_cols)}")
+            selected_option = st.selectbox(
+                "Source Date Column (recommended for trend accuracy)",
+                options=date_options,
+                index=default_index
+            )
+            selected_date_col = None if selected_option == "Auto-detect" else selected_option
+
         st.divider()
         is_confirmed = st.checkbox("Confirm details and sync target")
 
         if is_confirmed and comp_name:
-            if st.button("🚀 Sync Data and Save", use_container_width=True):
-                sep_map = {",": ",", ";": ";", "Tab": "\t", "Auto-detect": None}
-                current_sep = sep_map[sep_choice]
+            if st.button("🚀 Sync Data and Save", width="stretch"):
+                overlay_placeholder = st.empty()
+                show_processing_overlay(overlay_placeholder, "Syncing data to Cosmos and PostgreSQL...")
                 try:
                     with st.spinner("📂 Reading CSV file..."):
+                        uploaded_file.seek(0)
                         df = pd.read_csv(
                             uploaded_file,
                             sep=current_sep if current_sep else None,
                             engine='python' if not current_sep else None
                         )
 
-                    result = master_sync_and_save(df, comp_name)
+                    result = master_sync_and_save(df, comp_name, selected_date_col=selected_date_col)
 
                     if result:
                         if 'exec_summary' in st.session_state:
@@ -493,12 +721,14 @@ with st.container(border=True):
                         st.session_state.last_sync_company = comp_name
                         # SUCCESS POPUP — shown after sync completes
                         show_success_dialog(
-                            f"{len(df)} records for **{comp_name}** have been synced to "
-                            f"Cosmos DB and PostgreSQL successfully."
+                            f"Sync complete: {len(df)} records for **{comp_name}** were saved successfully."
                         )
 
                 except Exception as e:
+                    log_runtime_issue("master_sync", e)
                     show_error_dialog(f"Sync failed: {e}")
+                finally:
+                    hide_processing_overlay(overlay_placeholder)
 
         elif not comp_name and is_confirmed:
             st.warning("Please enter a Company Name.")
@@ -506,37 +736,131 @@ with st.container(border=True):
 st.divider()
 
 # --- 3. AI COMMAND CENTER ---
-from ai_command_center import query_cosmos_analysis, run_analyst
+from ai_command_center import (
+    query_cosmos_analysis,
+    run_analyst,
+    build_show_only_response,
+    parse_user_intent,
+    compute_root_cause_clusters,
+    detect_anomalies,
+)
 
 st.subheader("💬 AI Command Center")
 with st.container(border=True):
-    query = st.text_input("Ask about your data...", placeholder="e.g., What are the main complaints for Netflix?")
+    if "ai_memory_context" not in st.session_state:
+        st.session_state.ai_memory_context = None
+    if "ai_last_results_df" not in st.session_state:
+        st.session_state.ai_last_results_df = None
 
-    if st.button("Execute Analysis", use_container_width=True) and query:
+    query = st.text_input("Ask about your data...", placeholder="e.g., What are the main complaints for Netflix?")
+    st.caption("Tip: Use 'show' for direct results, or ask for 'trend', 'anomaly', 'root cause', or 'recommended actions'.")
+    ai_col1, ai_col2 = st.columns([3, 1])
+    with ai_col1:
+        use_followup_memory = st.checkbox("Use follow-up memory", value=True)
+    with ai_col2:
+        if st.button("Clear AI Memory", width="stretch"):
+            st.session_state.ai_memory_context = None
+            st.session_state.ai_last_results_df = None
+            st.success("AI memory cleared.")
+
+    if st.button("Execute Analysis", width="stretch") and query:
+        overlay_placeholder = st.empty()
+        show_processing_overlay(overlay_placeholder, "Analyzing records and preparing AI briefing...")
+        intent = parse_user_intent(query)
+        memory_ctx = st.session_state.ai_memory_context if use_followup_memory else None
 
         # Step 1: Fetch matching records from Cosmos DB
-        with st.spinner("🔍 Fetching relevant records from Cosmos DB..."):
-            try:
-                results_df = query_cosmos_analysis(query)
-            except RuntimeError as e:
-                # DB connection or query failure — show error popup and stop
-                show_error_dialog(str(e))
-                st.stop()
+        try:
+            with st.spinner("🔍 Fetching relevant records from Cosmos DB..."):
+                try:
+                    results_df, new_context = query_cosmos_analysis(query, memory_context=memory_ctx)
+                except RuntimeError as e:
+                    # DB connection or query failure — show error popup and stop
+                    show_error_dialog(str(e))
+                    st.stop()
 
-        # Step 2: Run GPT analyst on the results
-        if results_df is not None and not results_df.empty:
-            with st.spinner("🧠 Senior Analyst is reviewing records..."):
-                analyst_report = run_analyst(query, results_df)
+            # Step 2: Run GPT analyst on the results
+            if results_df is not None and not results_df.empty:
+                st.session_state.ai_memory_context = new_context
+                st.session_state.ai_last_results_df = results_df.copy()
 
-            st.markdown("### 📊 Analyst Briefing")
-            with st.container(border=True):
-                st.markdown(analyst_report)
+                if intent.get("show_only") and not any([
+                    intent.get("wants_actions"),
+                    intent.get("wants_trend_chart"),
+                    intent.get("wants_anomaly"),
+                    intent.get("wants_root_cause"),
+                ]):
+                    analyst_report = build_show_only_response(query, results_df)
+                else:
+                    with st.spinner("🧠 Senior Analyst is reviewing records..."):
+                        analyst_report = run_analyst(
+                            query,
+                            results_df,
+                            memory_context=st.session_state.ai_memory_context,
+                        )
 
-            with st.expander(f"📂 Review Source Data ({len(results_df)} records used)"):
-                st.dataframe(results_df, use_container_width=True, hide_index=True, height=300)
-        else:
-            # NO RESULTS POPUP — query ran fine but nothing matched
-            show_no_results_dialog()
+                st.markdown("### 📊 Analyst Briefing")
+                with st.container(border=True):
+                    st.markdown(analyst_report)
+
+                if intent.get("wants_root_cause"):
+                    clusters = compute_root_cause_clusters(results_df, top_n=6)
+                    if clusters:
+                        st.markdown("### 🧩 Root Cause Themes")
+                        cluster_df = pd.DataFrame(clusters, columns=["theme", "mentions"])
+                        st.dataframe(cluster_df, width="stretch", hide_index=True)
+
+                if intent.get("wants_anomaly"):
+                    anomaly_msg = detect_anomalies(results_df)
+                    if anomaly_msg:
+                        st.warning(anomaly_msg)
+                    else:
+                        st.info("No clear anomaly detected in the current result set.")
+
+                if intent.get("wants_trend_chart"):
+                    trend_df = results_df.copy()
+                    source_series = None
+                    if "source_date" in trend_df.columns:
+                        source_series = pd.to_datetime(trend_df["source_date"], errors="coerce")
+
+                    if source_series is not None and source_series.notna().any():
+                        trend_df["trend_date"] = source_series
+                    else:
+                        trend_df["trend_date"] = pd.to_datetime(trend_df["timestamp"], errors="coerce")
+
+                    trend_df = trend_df.dropna(subset=["trend_date"])
+                    if not trend_df.empty:
+                        trend_df["is_negative"] = (trend_df["sentiment"].astype(str).str.lower() == "negative").astype(int)
+                        daily = trend_df.groupby(trend_df["trend_date"].dt.date).agg(
+                            avg_rating=("rating", "mean"),
+                            negative_reviews=("is_negative", "sum"),
+                            total_reviews=("is_negative", "count"),
+                        ).reset_index()
+                        daily["negative_rate"] = daily["negative_reviews"] / daily["total_reviews"]
+                        daily = daily.rename(columns={"trend_date": "Date"})
+                        daily = daily.sort_values("Date")
+                        st.markdown("### 📈 Trend Chart")
+                        st.line_chart(
+                            daily.set_index("Date")[["avg_rating", "negative_rate"]],
+                            width="stretch",
+                        )
+
+                export_csv = results_df.to_csv(index=False).encode("utf-8-sig")
+                st.download_button(
+                    "⬇️ Export This Answer Data (CSV)",
+                    data=export_csv,
+                    file_name=f"ai_answer_export_{datetime.now().strftime('%Y%m%d_%H%M')}.csv",
+                    mime="text/csv",
+                    width="stretch",
+                )
+
+                with st.expander(f"📂 Review Source Data ({len(results_df)} records used)"):
+                    st.dataframe(results_df, width="stretch", hide_index=True, height=300)
+            else:
+                # NO RESULTS POPUP — query ran fine but nothing matched
+                show_no_results_dialog()
+        finally:
+            hide_processing_overlay(overlay_placeholder)
 
 # --- GLOBAL PERSISTENT FILTER & DOWNLOAD ---
 st.divider()
@@ -547,18 +871,30 @@ with st.container(border=True):
     data_source = None
 
     try:
-        conn = psycopg2.connect(
+        with psycopg2.connect(
             dbname=os.getenv("POSTGRES_DB"),
             user=os.getenv("POSTGRES_USER"),
             password=os.getenv("POSTGRES_PASSWORD"),
             host=os.getenv("POSTGRES_HOST"),
             port=os.getenv("POSTGRES_PORT")
-        )
-        all_data_df = pd.read_sql("SELECT * FROM enriched_analytics_view", conn)
-        conn.close()
+        ) as conn:
+            with conn.cursor() as cur:
+                cur.execute("SELECT * FROM enriched_analytics_view")
+                pg_rows = cur.fetchall()
+                pg_cols = [desc[0] for desc in (cur.description or [])]
+                all_data_df = pd.DataFrame(pg_rows, columns=pg_cols)
+
         all_data_df.columns = [c.strip() for c in all_data_df.columns]
         data_source = "postgres"
-    except Exception:
+    except psycopg2.Error as e:
+        log_runtime_issue("postgres_filter_panel", e)
+        # Keep the panel usable when PG is temporarily unavailable.
+        if 'current_batch' in st.session_state:
+            all_data_df = pd.DataFrame(st.session_state.current_batch)
+            all_data_df.columns = [c.strip().lower() for c in all_data_df.columns]
+            data_source = "session"
+    except Exception as e:
+        log_runtime_issue("filter_panel_unexpected", e)
         # Keep the panel usable when PG is temporarily unavailable.
         if 'current_batch' in st.session_state:
             all_data_df = pd.DataFrame(st.session_state.current_batch)
@@ -597,14 +933,21 @@ with st.container(border=True):
         ratings = sorted(all_data_df['rating'].unique().tolist())
         selected_ratings = f_col3.multiselect("Filter by Rating", options=ratings, placeholder="Choose ratings...")
 
-        # 4. Date Filter (only when we have date data)
+        # 4. Date Filter (source/original date only; never use sync timestamp)
         date_range = None
-        if "sync_timestamp" in all_data_df.columns:
-            all_data_df['sync_timestamp'] = pd.to_datetime(all_data_df['sync_timestamp'], errors='coerce').dt.date
-            valid_dates = all_data_df['sync_timestamp'].dropna()
+        apply_date_filter = False
+        date_filter_col = None
+        if "original_date" in all_data_df.columns:
+            all_data_df["filter_date"] = pd.to_datetime(all_data_df["original_date"], errors="coerce").dt.date
+            if all_data_df["filter_date"].notna().any():
+                date_filter_col = "filter_date"
+
+        if date_filter_col:
+            valid_dates = all_data_df[date_filter_col].dropna()
             if not valid_dates.empty:
                 min_d = valid_dates.min()
                 max_d = valid_dates.max()
+                apply_date_filter = f_col4.checkbox("Apply Date Filter", value=False)
                 date_range = f_col4.date_input(
                     "Filter by Date Range",
                     value=(min_d, max_d),
@@ -612,9 +955,9 @@ with st.container(border=True):
                     max_value=max_d
                 )
             else:
-                f_col4.info("No valid dates found.")
+                f_col4.info("No valid source dates found.")
         else:
-            f_col4.info("No date field found.")
+            f_col4.info("No source date field found.")
 
         # Apply Filters
         filtered_df = all_data_df.copy()
@@ -625,13 +968,13 @@ with st.container(border=True):
         if selected_ratings:
             filtered_df = filtered_df[filtered_df['rating'].isin(selected_ratings)]
 
-        if isinstance(date_range, tuple) and len(date_range) == 2 and "sync_timestamp" in filtered_df.columns:
+        if apply_date_filter and isinstance(date_range, tuple) and len(date_range) == 2 and "filter_date" in filtered_df.columns:
             filtered_df = filtered_df[
-                (filtered_df['sync_timestamp'] >= date_range[0]) &
-                (filtered_df['sync_timestamp'] <= date_range[1])
+                (filtered_df["filter_date"] >= date_range[0]) &
+                (filtered_df["filter_date"] <= date_range[1])
             ]
 
-        st.dataframe(filtered_df, use_container_width=True, hide_index=True, height=400)
+        st.dataframe(filtered_df, width="stretch", hide_index=True, height=400)
 
         timestamp_str = datetime.now().strftime("%Y%m%d_%H%M")
         csv_data = filtered_df.to_csv(index=False).encode('utf-8-sig')
@@ -641,7 +984,7 @@ with st.container(border=True):
             data=csv_data,
             file_name=f"Global_Export_{timestamp_str}.csv",
             mime="text/csv",
-            use_container_width=True
+            width="stretch"
         )
 
 # --- DANGER ZONE ---
@@ -655,21 +998,36 @@ with st.expander("⚠️ Danger Zone"):
         st.subheader("Delete by Company")
         try:
             container = get_cosmos_container()
-            all_items = list(container.read_all_items())
-            available_companies = sorted(set(i.get('Company', '') for i in all_items if i.get('Company')))
-        except Exception:
+            available_companies = sorted(list(container.query_items(
+                query="""
+                    SELECT DISTINCT VALUE c.Company
+                    FROM c
+                    WHERE IS_DEFINED(c.Company) AND c.Company != ""
+                """,
+                enable_cross_partition_query=True
+            )))
+        except Exception as e:
+            log_runtime_issue("delete_companies_list", e)
             available_companies = []
 
         company_to_delete = st.selectbox("Select Company to Delete", options=available_companies or ["No data found"])
         confirm_scoped = st.checkbox("I confirm I want to delete this company's data", key="confirm_scoped")
 
-        if confirm_scoped and st.button("🗑️ Delete Company Data", use_container_width=True, key="btn_scoped"):
+        if confirm_scoped and st.button("🗑️ Delete Company Data", width="stretch", key="btn_scoped"):
             if company_to_delete and company_to_delete != "No data found":
                 with st.spinner(f"Deleting all data for {company_to_delete}..."):
                     try:
                         # Delete from Cosmos
                         container = get_cosmos_container()
-                        items_to_delete = [i for i in list(container.read_all_items()) if i.get('Company') == company_to_delete]
+                        items_to_delete = list(container.query_items(
+                            query="""
+                                SELECT c.id, c.Company
+                                FROM c
+                                WHERE c.Company = @company
+                            """,
+                            parameters=[{"name": "@company", "value": company_to_delete}],
+                            enable_cross_partition_query=True
+                        ))
                         for item in items_to_delete:
                             container.delete_item(item=item['id'], partition_key=item['Company'])
 
@@ -699,6 +1057,7 @@ with st.expander("⚠️ Danger Zone"):
                         show_success_dialog(f"All data for **{company_to_delete}** has been deleted successfully.")
 
                     except Exception as e:
+                        log_runtime_issue("scoped_delete", e)
                         show_error_dialog(f"Delete failed: {e}")
 
     # --- NUCLEAR DELETE (Full Wipe) ---
@@ -708,7 +1067,7 @@ with st.expander("⚠️ Danger Zone"):
         confirm_nuke = st.checkbox("I understand this cannot be undone", key="confirm_nuke_check")
 
         if confirm_nuke and confirm_text == "DELETE":
-            if st.button("💣 Wipe All Data", use_container_width=True, key="btn_nuke"):
+            if st.button("💣 Wipe All Data", width="stretch", key="btn_nuke"):
                 with st.spinner("Wiping all data from Cosmos DB and PostgreSQL..."):
                     try:
                         # Wipe Cosmos — delete and recreate the container
@@ -738,10 +1097,17 @@ with st.expander("⚠️ Danger Zone"):
 
                         # SUCCESS POPUP + refresh so decoupled sections reload from DB state
                         st.session_state.refresh_on_success_ok = True
-                        show_success_dialog("All data has been wiped from Cosmos DB and PostgreSQL successfully.")
+                        show_success_dialog("All data has been wiped successfully.")
 
                     except Exception as e:
+                        log_runtime_issue("full_wipe", e)
                         show_error_dialog(f"Full wipe failed: {e}")
+
+if st.session_state.get("runtime_issues"):
+    with st.sidebar.expander("Runtime Diagnostics", expanded=False):
+        diag_df = pd.DataFrame(st.session_state.get("runtime_issues", []))
+        if not diag_df.empty:
+            st.dataframe(diag_df.tail(10), width="stretch", hide_index=True, height=240)
 
 st.divider()
 st.markdown("<center><p style='color: gray;'>Built by Brendy Pro | 2026 | Enterprise Multi-Cloud Edition</p></center>", unsafe_allow_html=True)

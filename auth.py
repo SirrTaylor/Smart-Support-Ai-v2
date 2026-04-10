@@ -11,6 +11,7 @@ import psycopg2
 PBKDF2_ITERATIONS = 240000
 MAX_LOGIN_ATTEMPTS = int(os.getenv("APP_MAX_LOGIN_ATTEMPTS", "5"))
 LOCKOUT_MINUTES = int(os.getenv("APP_LOCKOUT_MINUTES", "15"))
+SESSION_MAX_AGE_HOURS = int(os.getenv("APP_SESSION_MAX_AGE_HOURS", "12"))
 
 
 def _get_conn():
@@ -25,6 +26,29 @@ def _get_conn():
 
 def _utc_now():
     return datetime.now(timezone.utc)
+
+
+def _get_session_secret() -> str:
+    return (
+        os.getenv("APP_SESSION_SECRET")
+        or os.getenv("AZURE_OPENAI_KEY")
+        or os.getenv("POSTGRES_PASSWORD")
+        or "dev-session-secret"
+    )
+
+
+def _sign_payload(payload: str) -> str:
+    secret = _get_session_secret().encode("utf-8")
+    return hmac.new(secret, payload.encode("utf-8"), hashlib.sha256).hexdigest()
+
+
+def _b64url_encode(value: str) -> str:
+    return base64.urlsafe_b64encode(value.encode("utf-8")).decode("utf-8").rstrip("=")
+
+
+def _b64url_decode(value: str) -> str:
+    padding = "=" * (-len(value) % 4)
+    return base64.urlsafe_b64decode((value + padding).encode("utf-8")).decode("utf-8")
 
 
 def validate_password_strength(password: str):
@@ -284,6 +308,69 @@ def authenticate_user(username: str, password: str):
 
     return True, "Login successful.", {
         "id": user_id,
+        "username": db_username,
+        "role": role,
+        "must_change_password": bool(must_change),
+    }
+
+
+def create_session_token(user: dict, max_age_hours: int = SESSION_MAX_AGE_HOURS):
+    """
+    Create signed session token for browser persistence across refresh.
+    """
+    if not user:
+        return ""
+    exp_ts = int((_utc_now() + timedelta(hours=max_age_hours)).timestamp())
+    payload = f"{int(user.get('id', 0))}|{str(user.get('username', '')).lower()}|{exp_ts}"
+    sig = _sign_payload(payload)
+    token = f"{payload}|{sig}"
+    return _b64url_encode(token)
+
+
+def verify_session_token(token: str):
+    """
+    Validate token signature/expiry and return current user from DB if active.
+    """
+    if not token:
+        return None
+    try:
+        decoded = _b64url_decode(token)
+        parts = decoded.split("|")
+        if len(parts) != 4:
+            return None
+        user_id_str, username, exp_ts_str, sig = parts
+        payload = f"{user_id_str}|{username}|{exp_ts_str}"
+        if not hmac.compare_digest(_sign_payload(payload), sig):
+            return None
+        exp_ts = int(exp_ts_str)
+        if int(_utc_now().timestamp()) > exp_ts:
+            return None
+        user_id = int(user_id_str)
+    except Exception:
+        return None
+
+    conn = _get_conn()
+    cur = conn.cursor()
+    cur.execute(
+        """
+        SELECT id, username, role, is_active, must_change_password
+        FROM app_users
+        WHERE id = %s
+        """,
+        (user_id,),
+    )
+    row = cur.fetchone()
+    cur.close()
+    conn.close()
+    if not row:
+        return None
+
+    db_user_id, db_username, role, is_active, must_change = row
+    if not is_active or db_username.lower() != username.lower():
+        return None
+
+    return {
+        "id": db_user_id,
         "username": db_username,
         "role": role,
         "must_change_password": bool(must_change),
