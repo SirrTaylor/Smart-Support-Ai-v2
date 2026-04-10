@@ -44,8 +44,8 @@ The system follows a professional ETL (Extract, Transform, Load) and RAG (Retrie
 
 ---
 
-##🛠 Local Setup Instructions
-1. Database Configuration (PostgreSQL)
+## 🛠 Local Setup Instructions
+1. **Database Configuration (PostgreSQL)**
 The app uses PostgreSQL to store user credentials and mirrored analytics data.
 
 Create the Database: Ensure you have PostgreSQL installed and running. Create a new database named smart_support_db (or your preferred name).
@@ -53,7 +53,7 @@ Create the Database: Ensure you have PostgreSQL installed and running. Create a 
 Table Initialization: Run the following SQL commands to set up the necessary schema for user management:
 
 SQL
--- Create Users table for login protection
+-- Create Users table for login protection 
 CREATE TABLE users (
     id SERIAL PRIMARY KEY,
     username VARCHAR(50) UNIQUE NOT NULL,
@@ -70,7 +70,8 @@ CREATE TABLE support_analytics (
     source_date DATE,
     original_text TEXT
 );
-2. Environment Variables (.env)
+
+2.** Environment Variables (.env)**
 Create a file named .env in the root directory of the project. This file stores your secrets and configuration keys. Do not commit this file to GitHub.
 
 Copy the template below and fill in your specific Azure and Database credentials:
