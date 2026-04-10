@@ -114,4 +114,10 @@ Copy the template below and fill in your specific Azure and Database credentials
   ```bash
    pip install -r requirements.txt
 ```
-Security Note: Always use synthetic data for testing. Ensure your .gitignore file includes .env to prevent leaking your Azure keys to the public repository.
+## 🔒 Data Privacy & Security
+
+Sample Data: The repository includes a sample_data.csv synthesized from anonymized real-world support reviews. All PII (Personally Identifiable Information) has been removed or replaced.
+
+Local Processing: When running this app locally, your data remains within your configured Azure environment and local PostgreSQL instance.
+
+Best Practice: I strongly recommend using only synthetic or non-sensitive datasets for initial configuration and testing. **Do not upload confidential customer data to a public or shared testing environment.**
